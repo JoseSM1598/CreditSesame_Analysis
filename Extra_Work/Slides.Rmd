@@ -1,0 +1,293 @@
+---
+title: 'Understanding Credit Card Delinquency'
+author: "Carolyn Chen, José San Martin, Michael Tan, Man-Lin Hsiao"
+date: "11/7/2018"
+output:
+  beamer_presentation:
+    includes:
+      in_header: custom2.tex
+  ioslides_presentation: default
+font-size: 12px
+---
+```{r, echo=FALSE}
+suppressWarnings(suppressMessages(library(data.table)))
+suppressWarnings(suppressMessages(library(dplyr)))
+suppressWarnings(suppressMessages(library(plyr)))
+suppressWarnings(suppressMessages(library(tidyr)))
+suppressWarnings(suppressMessages(library(vioplot)))
+suppressWarnings(suppressMessages(library(ggplot2)))
+suppressWarnings(suppressMessages(library(magrittr)))
+suppressWarnings(suppressMessages(library(devtools)))
+suppressWarnings(suppressMessages(library(tidyverse)))
+suppressWarnings(suppressMessages(library(usmap)))
+suppressWarnings(suppressMessages(library(randomForest)))
+suppressWarnings(suppressMessages(library("cluster")))
+suppressWarnings(suppressMessages(library("factoextra")))
+
+user_profile = fread("user_profile.csv")
+first_session = fread("first_session.csv")
+user_engagement = fread("user_engagement.csv")
+```
+
+Data Set Visualizations
+===
+
+- Credit Sesame is a credit and loan-management platform
+- Datasets: User Profile, First Session, 30-Day User Engagement
+- First, we wanted to understand the demographics of Credit Sesame users. 
+- Data cleaning for ease of visualization
+- Histograms, Dot Plots, Violin Plots, Choropleth Maps
+```{r, echo=FALSE, out.width='.49\\linewidth', fig.width=3, fig.height=3,fig.align='center'}
+#Barplot of Credit Score Buckets
+barplot(table(user_profile$credit_score_bucket), main = "Credit Score Frequency")
+#make age and credit score continuous
+sub<-function(x){
+ x <-x%>%
+   gsub("[(]", "",.)%>%
+   gsub("[]]", "",.)%>%
+   gsub(" ", "", .)%>%
+   strsplit(split = ",")
+ for(i in 1:length(x)){
+   x[[i]] = as.numeric(x[[i]][1]) + as.numeric(x[[i]][2])
+   x[[i]] = x[[i]]/2
+   }
+   return(unlist(x))
+}
+user_profile$credit_score_continuous = sub(user_profile$credit_score_bucket)
+user_profile$age_continuous = sub(user_profile$age_bucket)
+```
+
+
+Exploratory Data Analysis (cont.)
+===
+
+- Dot plots of engagement stats versus credit score
+```{r,echo=FALSE}
+c = merge(user_profile, user_engagement, on="user_id", how="outer")
+#Types of loans by gender
+total_open_loan_accounts = list(user_profile$count_tradelines_open_mortgages, user_profile$count_tradelines_open_student_loans, user_profile$count_tradelines_open_secured_loans, user_profile$count_tradelines_open_unsecured_loans)
+par(mfrow=c(1,2))
+count1 = 1
+engagementStats = list(c$click_apply_count, c$session_length)
+engagementNames = c("click apply count", "session length")
+y = c("count", "time (seconds)")
+for(count in engagementStats){
+    plot(c$credit_score_continuous, count, main = c(engagementNames[count1]), xlab = "credit score", ylab=y[count1], pch='.', col=rgb(0,0,0,alpha=0.5))
+  count1=count1+1
+}
+```
+
+EDA Visualizations (cont.)
+===
+- Violin Plots of loan type vs gender
+```{r,echo=FALSE}
+count = 1
+tmp = c("mortgages", "student loans", "secured loans", "unsecured loans")
+par(mfrow=c(1,2))
+for(numAccounts in total_open_loan_accounts){
+  if(count==1 | count ==3){
+     vioplot(numAccounts[user_profile$gender==""], numAccounts[user_profile$gender=="Female"], numAccounts[user_profile$gender=="Male"], numAccounts[user_profile$gender=="Unisex"], names = c("Unknown", "F", "M", "Unisex"))
+  title(main=tmp[count], ylab = "count", xlab="gender")
+  }
+   count=count+1
+ 
+}
+```
+
+EDA Visualizations (cont.)
+===
+- Violin plots of loan type vs homeowners
+```{r, echo=FALSE}
+count = 1
+tmp = c("mortgages", "student loans", "secured loans", "unsecured loans")
+par(mfrow=c(1,2))
+for(numAccounts in total_open_loan_accounts){
+  if(count==1 | count ==3) {
+      vioplot(numAccounts[user_profile$is_homeowner==TRUE], numAccounts[user_profile$is_homeowner==FALSE], names = c("T", "F"))
+  title(main=tmp[count], ylab = "count", xlab="homeowner")
+  }
+  count=count+1
+}
+```
+
+
+Visualizations (cont.)
+===
+
+- Choropleth Map shows us geographical distribution of credit card debt trends
+- Delinquency: user has missed 2 consecutive payments
+- What are profiles of delinquent vs. non-delinquent users and within levels of delinquency?
+```{r, echo=FALSE,fig.width=5, fig.height=4,fig.align='center'}
+#usmap::plot_usmap()
+AvgTotalCCAmountPastDue = user_profile %>% dplyr::group_by(state) %>% dplyr::summarize(mean(total_open_cc_amount_past_due))
+plot_usmap(data = AvgTotalCCAmountPastDue , values = "mean(total_open_cc_amount_past_due)", lines = "brown") + 
+  scale_fill_continuous(
+    low = "white", high = "brown", name = "Avg CC Amount Past Due", label = scales::comma
+  ) + theme(legend.position = "right")
+```
+
+Next Step: Random Forest Model
+===
+- From our EDA we could already tell that there was a difference in profile between people with and without derogatory accounts, and the next logical step would be to create a predictive model
+- Appropriate model given we have response variable for derogratory variable
+
+```{r, echo=FALSE, results= "hide"}
+#Set Up Data 
+RFData <- user_profile %>%
+  mutate(derogatory = ifelse(count_tradelines_condition_derogatory==0, 0, 1))%>%
+  dplyr::select(-c(user_signup_timestamp,user_id, recent_bankruptcy_date,age_bucket, credit_score_bucket, gender, zipcode, state, count_tradelines_condition_derogatory))%>%
+  dplyr::select(-c(1))%>%
+  na.omit()
+RFData$derogatory = as.factor(RFData$derogatory)
+#Set up training and testing data
+set.seed(123)
+smp_size <- floor(0.75 * nrow(RFData))
+train_ind <- sample(seq_len(nrow(RFData)), size = smp_size)
+train <- RFData[train_ind, ]
+test <- RFData[-train_ind, ]
+#Train the model
+Derog.rf=randomForest(derogatory ~ . , data = train)
+#Obtain Accuracy
+pred_test = predict(Derog.rf, test, type="response")
+mean(pred_test == test$derogatory)#About a 90% accuracy!
+```
+
+Random Forest Model 
+===
+- Accuracy of about 90%, obtained a pretty small out-of-bag error rate
+```{r,warning=FALSE, message=FALSE, echo=FALSE, fig.width=4, fig.height=3,fig.align='center'}
+#Look at the OOB error vs number of trees
+plot(Derog.rf)
+```
+
+Random Forest Model
+===
+- Now we look at other values from our fitted Random Forest model
+- Using a classifier to determine if a person has obtained a derogatory account, or not at all. We concluded that having even just one derogatory account is cause of concern for the bank. 
+- Based on the importance output, the 5 variables of the highest importance are homeownership, tradelines average days since opened, tradelines maximum days since opened, tradelines minimum days since opened, and number of closed tradeline accounts 
+
+Poisson Model 
+===
+\begin{equation*}
+  \begin{aligned}
+    \mathrm{Derogratory Tradelines} = \alpha 
+    &+ \beta_{1}  \mathrm{Age} \\
+    &+ \beta_{2}  \mathrm{Gender} \\
+    &+ \beta_{3}  \mathrm{Credit Score} \\
+    &+ \beta_{4}  \mathrm{Credit Card Utilization Ratio} \\
+    &+ \beta_{5}  \mathrm{Auto Loans Balance} \\
+    &+ \beta_{6}  \mathrm{Student Loans Balance} \\
+    &+ \beta_{7}  \mathrm{Mortgage Balance}  \\
+    &+ \beta_{8}  \mathrm{Mortgage Loan * Auto Loan} \\
+    &+ \beta_{9}  \mathrm{Auto Loan * Student Loan}
+  \end{aligned}
+\end{equation*}
+
+\smallbreak
+\begin{small}
+- Age: For every 10 years we add to a user, we expect the number of derogatory accounts to change by a multiplicative factor of e(10*9.863e-03) = 1.1. This shows age is not a significant factor.
+\smallbreak
+When we increase the credit score of a user by 100 points, the expected number of derogatory accounts changes by a multiplicative factor of 0.36.
+\end{small}
+```{r,echo=FALSE, warning=FALSE}
+#Poisson Model
+pois_data <- user_profile%>%
+ filter(gender != "")
+#Poisson Model
+pois_data <- user_profile%>%
+ filter(gender != "")
+creditScore1 = sub(pois_data$credit_score_bucket)
+Age1 = sub(pois_data$age_bucket)
+m1 <- glm(count_tradelines_condition_derogatory ~ Age1 + gender + creditScore1 + avg_cc_utilization_ratio + total_auto_loans_balance + total_student_loans_balance + total_mortgage_loans_balance + total_auto_loans_balance:total_student_loans_balance + total_auto_loans_balance:total_mortgage_loans_balance, family="poisson", data=pois_data)
+```
+
+Conclusions
+===
+
+- Users with non-zero derogatory accounts tended to have similar characteristics regardless of how many of those accounts they had. Once one deliquency noted, intervention should occur to stem further ones.
+- Age should not be a significant predictor of user derogatory behavior. 
+- Credit score is a strong predictor of derogatory behaviour, but user base of CS is also right-skewed.
+- States with most past due credit card accounts are Nevada, Utah, Wyoming and Vermont. Could target reminders to people from those states.
+
+
+Original Model: Clustering 
+===
+- K means clustering to identify similarity of deliquent vs non-deliquent users
+- Looked at users with 'none' (0), 'some' (1-2) and 'many' (>2) deliquencies
+- Users with 'some' deliquencies still quite similar to those with 'many'
+
+```{r, echo=FALSE, fig.width=4, fig.height=3,fig.align='center'}
+#make age and credit score continuous
+sub<-function(x){
+ x <-x%>%
+   gsub("[(]", "",.)%>%
+   gsub("[]]", "",.)%>%
+   gsub(" ", "", .)%>%
+   strsplit(split = ",")
+ for(i in 1:length(x)){
+   x[[i]] = as.numeric(x[[i]][1]) + as.numeric(x[[i]][2])
+   x[[i]] = x[[i]]/2
+   }
+   return(unlist(x))
+}
+user_profile$credit_score_continuous = sub(user_profile$credit_score_bucket)
+user_profile$age_continuous = sub(user_profile$age_bucket)
+c = merge(user_profile, user_engagement, on="user_id", how="outer")
+
+cluster_data <- c %>%
+  mutate(derogatory = ifelse(count_tradelines_condition_derogatory==0, "None", 
+                             ifelse(count_tradelines_condition_derogatory==1 |count_tradelines_condition_derogatory==2  , "Some", "Many")))%>%
+  dplyr::select(derogatory,is_homeowner,credit_score_continuous, age_continuous, view_cc_details_count)%>%
+  na.omit()
+#Take a sample of 2000 observations to create our models
+cluster_data <- cluster_data%>%
+  #scale(.)%>%
+  slice(1:2000)%>%
+  na.omit()
+
+#Hierarchial Modeling
+#Create the distance matrix using euclidean length
+d <- dist(cluster_data[,2:5], method = "euclidean")
+# Hierarchical clustering using Ward's method
+res.hc <- hclust(d)
+grp <- cutree(res.hc, k = 3)
+#table(grp, cluster_data$derogatory)
+# Visualize Our hierachical model with 3 groups
+plot(res.hc, cex = 0.6) # plot tree
+rect.hclust(res.hc, k = 3, border = 2:5) # add rectangle
+
+```
+
+K-means Visualization 
+===
+```{r, warning=FALSE, message=FALSE, echo=FALSE, fig.width=4, fig.height=3,fig.align='center'}
+#Find optimal number of clusters
+#K-means with 6 groups (as per the diagram above)
+
+par(mfrow=c(1,2))
+km.res <- kmeans(cluster_data[,2:5], 3, nstart = 25)
+# Visualize our k-means
+fviz_cluster(km.res, data = cluster_data[,2:5], frame.type = "convex") +
+  theme_minimal()
+
+
+```
+
+K-means Visualization 
+===
+```{r,warning=FALSE, message=FALSE, echo=FALSE, fig.width=4, fig.height=3,fig.align='center'}
+#Visualize k means
+km.res <- kmeans(cluster_data[,2:4], 3, nstart = 25)
+fviz_cluster(km.res, data = cluster_data[,2:4], frame.type = "convex")+
+  theme_minimal()
+
+```
+
+Problems with Clustering Model
+===
+- The variables we chose were arbitrary and the hierarchical model was too naive. 
+- It wasn't a good method to use with the rest of our analysis because it didn't tell us anything substantial. 
+- We did not split into training/testing sets and use Cross Validation to check the model.
+- We arbitrarily cut our trees at an unmotivated point.
+
+

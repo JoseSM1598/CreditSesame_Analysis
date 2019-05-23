@@ -1,0 +1,140 @@
+---
+title: 'Datathon Presentation'
+author: "Carolyn Chen, José San Martin, Michael Tan, Man-Lin Hsiao"
+date: "11/7/2018"
+output:
+  beamer_presentation:
+    includes:
+      in_header: custom2.tex
+  ioslides_presentation: default
+font-size: 12px
+---
+```{r, echo=FALSE}
+library(rmarkdown)
+library(knitr)
+suppressWarnings(suppressMessages(library(data.table)))
+suppressWarnings(suppressMessages(library(plyr)))
+suppressWarnings(suppressMessages(library(dplyr)))
+suppressWarnings(suppressMessages(library(tidyr)))
+suppressWarnings(suppressMessages(library(vioplot)))
+suppressWarnings(suppressMessages(library(ggplot2)))
+
+user_profile = fread("user_profile.csv")
+first_session = fread("first_session.csv")
+user_engagement = fread("user_engagement.csv")
+```
+
+Exploratory Data Analysis
+===
+
+- Credit Sesame is a credit and loan-management platform
+- Datasets: User Profile, First Session, 30-Day User Engagement
+- First, we wanted to understand the demographics of Credit Sesame users. 
+- Data cleaning for ease of visualization
+- Histograms, Dot Plots, Violin Plots, Choropleth Maps
+```{r, echo=FALSE, out.width='.49\\linewidth', fig.align='center', fig.width=5, fig.height=5}
+
+#Barplot of Credit Score Buckets
+barplot(table(user_profile$credit_score_bucket), main = "Credit Score Frequency", cex.names=0.5, cex.main=0.8)
+
+#make age and credit score continuous
+sub<-function(x){
+ x <-x%>%
+   gsub("[(]", "",.)%>%
+   gsub("[]]", "",.)%>%
+   gsub(" ", "", .)%>%
+   strsplit(split = ",")
+ for(i in 1:length(x)){
+   x[[i]] = as.numeric(x[[i]][1]) + as.numeric(x[[i]][2])
+   x[[i]] = x[[i]]/2
+   }
+   return(unlist(x))
+}
+user_profile$credit_score_continuous = sub(user_profile$credit_score_bucket)
+user_profile$age_continuous = sub(user_profile$age_bucket)
+
+```
+
+Exploratory Data Analysis (cont.)
+===
+
+- Dot plots of engagement stats versus credit score
+```{r,echo=FALSE}
+c = merge(user_profile, user_engagement, on="user_id", how="outer")
+
+#Types of loans by gender
+total_open_loan_accounts = list(user_profile$count_tradelines_open_mortgages, user_profile$count_tradelines_open_student_loans, user_profile$count_tradelines_open_secured_loans, user_profile$count_tradelines_open_unsecured_loans)
+
+par(mfrow=c(1,2))
+count1 = 1
+engagementStats = list(c$view_count, c$click_count, c$click_apply_count, c$session_length)
+engagementNames = c("view count", "click count", "click apply count", "session length")
+y = c("count", "count", "count", "time (seconds)")
+for(count in engagementStats){
+  if(count1==3|count1==4){
+    plot(c$credit_score_continuous, count, main = c(engagementNames[count1]), xlab = "credit score", ylab=y[count1])
+  }
+  count1=count1+1
+}
+
+```
+
+EDA Visualizations (cont.)
+===
+
+- Violin plots of loan type vs homeowners
+```{r, echo=FALSE}
+
+count = 1
+tmp = c("mortgages", "student loans", "secured loans", "unsecured loans")
+par(mfrow=c(1,2))
+for(numAccounts in total_open_loan_accounts){
+  if(count==1 | count ==3) {
+      vioplot(numAccounts[user_profile$is_homeowner==TRUE], numAccounts[user_profile$is_homeowner==FALSE], names = c("T", "F"))
+  title(main=tmp[count], ylab = "count", xlab="homeowner")
+  }
+  count=count+1
+}
+
+```
+
+
+EDA Visualizations (cont.)
+===
+
+- Violin Plots of loan type vs gender
+```{r,echo=FALSE}
+count = 1
+tmp = c("mortgages", "student loans", "secured loans", "unsecured loans")
+par(mfrow=c(1,2))
+for(numAccounts in total_open_loan_accounts){
+  if(count==1 | count ==3){
+     vioplot(numAccounts[user_profile$gender==""], numAccounts[user_profile$gender=="Female"], numAccounts[user_profile$gender=="Male"], numAccounts[user_profile$gender=="Unisex"], names = c("Unknown", "F", "M", "Unisex"))
+  title(main=tmp[count], ylab = "count", xlab="gender")
+  }
+   count=count+1
+ 
+}
+```
+
+
+EDA Visualizations (cont.)
+===
+
+- Choropleth Map shows us geographical distribution of credit card debt trends
+- Delinquency: user has missed 2 consecutive payments
+- What are profiles of delinquent vs. non-delinquent users and within levels of delinquency?
+```{r, echo=FALSE,fig.width=4, fig.height=4,fig.align='center'}
+suppressWarnings(suppressMessages(library(devtools)))
+suppressWarnings(suppressMessages(library(tidyverse)))
+suppressWarnings(suppressMessages(library(usmap)))
+#usmap::plot_usmap()
+
+AvgTotalCCAmountPastDue = user_profile %>% group_by(state) %>% summarize(mean(total_open_cc_amount_past_due))
+
+
+plot_usmap(data = AvgTotalCCAmountPastDue , values = "mean(total_open_cc_amount_past_due)", lines = "brown") + 
+  scale_fill_continuous(
+    low = "white", high = "brown", name = "Avg CC Amount Past Due", label = scales::comma
+  ) + theme(legend.position = "right")
+```
